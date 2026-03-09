@@ -1,18 +1,30 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, row_number, current_timestamp
+from pyspark.sql.functions import col, row_number, current_timestamp, broadcast
 from pyspark.sql.window import Window
 from delta.tables import DeltaTable
 
-spark = SparkSession.builder.appName("SilverTransformation").getOrCreate()
+# ----------------------------------------
+# Spark Session Configuration (Optimization)
+# ----------------------------------------
 
-# Load bronze tables
+spark = SparkSession.builder \
+.appName("SilverTransformation") \
+.config("spark.sql.shuffle.partitions", "200") \
+.config("spark.sql.adaptive.enabled", "true") \
+.config("spark.sql.adaptive.skewJoin.enabled", "true") \
+.getOrCreate()
+
+# ----------------------------------------
+# Load Bronze Tables
+# ----------------------------------------
+
 sales_df = spark.read.format("delta").load("/mnt/adls/bronze/sales")
 customers_df = spark.read.format("delta").load("/mnt/adls/bronze/customers")
 products_df = spark.read.format("delta").load("/mnt/adls/bronze/products")
 
-# -----------------------------
+# ----------------------------------------
 # Data Quality Filtering
-# -----------------------------
+# ----------------------------------------
 
 sales_clean = sales_df.filter(
     (col("amount") > 0) &
@@ -20,9 +32,9 @@ sales_clean = sales_df.filter(
     (col("product_id").isNotNull())
 )
 
-# -----------------------------
+# ----------------------------------------
 # Duplicate Detection
-# -----------------------------
+# ----------------------------------------
 
 windowSpec = Window.partitionBy("order_id").orderBy(col("update_timestamp").desc())
 
@@ -31,17 +43,30 @@ deduplicated_sales = sales_clean.withColumn(
     row_number().over(windowSpec)
 ).filter(col("row_num") == 1).drop("row_num")
 
-# -----------------------------
-# Join with Dimension Tables
-# -----------------------------
+# ----------------------------------------
+# Broadcast Join Optimization
+# ----------------------------------------
 
 sales_joined = deduplicated_sales \
-    .join(customers_df, "customer_id", "left") \
-    .join(products_df, "product_id", "left")
+.join(broadcast(customers_df), "customer_id", "left") \
+.join(broadcast(products_df), "product_id", "left")
 
-# -----------------------------
+# ----------------------------------------
+# Cache Data (Used Multiple Times)
+# ----------------------------------------
+
+sales_joined.cache()
+sales_joined.count()
+
+# ----------------------------------------
+# Repartition For Parallel Processing
+# ----------------------------------------
+
+sales_joined = sales_joined.repartition(8, "customer_id")
+
+# ----------------------------------------
 # Business Transformations
-# -----------------------------
+# ----------------------------------------
 
 final_df = sales_joined.select(
     col("order_id"),
@@ -54,9 +79,9 @@ final_df = sales_joined.select(
     current_timestamp().alias("etl_load_time")
 )
 
-# -----------------------------
-# Upsert Logic (MERGE)
-# -----------------------------
+# ----------------------------------------
+# Delta Upsert Logic
+# ----------------------------------------
 
 silver_path = "/mnt/adls/silver/sales_enriched"
 
@@ -74,4 +99,13 @@ if DeltaTable.isDeltaTable(spark, silver_path):
     }).whenNotMatchedInsertAll().execute()
 
 else:
-    final_df.write.format("delta").mode("overwrite").save(silver_path)
+    final_df.write.format("delta") \
+        .mode("overwrite") \
+        .partitionBy("order_date") \
+        .save(silver_path)
+
+# ----------------------------------------
+# Clear Cache
+# ----------------------------------------
+
+spark.catalog.clearCache()
