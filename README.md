@@ -10,6 +10,26 @@ This repository represents a **realistic enterprise data engineering workflow** 
 
 ---
 
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+
+A[Legacy Oracle Database] --> B[Azure Data Factory Ingestion Pipeline]
+
+B --> C[Azure Data Lake Gen2 Bronze Layer]
+
+C --> D[Azure Databricks Transformation]
+
+D --> E[Silver Layer Cleaned Data]
+
+E --> F[Gold Layer Aggregated Data]
+
+F --> G[Azure Synapse Serverless External Tables]
+
+G --> H[Power BI Dashboards]
+```
+
 # Architecture
 
 ```
@@ -197,6 +217,24 @@ VACUUM gold_customer_sales RETAIN 168 HOURS
 ```
 
 ---
+
+```mermaid
+flowchart TD
+
+A[Legacy Oracle Database] --> B[Azure Data Factory]
+
+B --> C[ADLS Gen2 Bronze]
+
+C --> D[Databricks Silver Transformations]
+
+D --> E[Delta Lake Optimization]
+
+E --> F[Gold Layer Analytics]
+
+F --> G[Synapse External Tables]
+
+G --> H[Power BI Dashboards]
+```
 
 # External Tables and Analytics Layer
 
